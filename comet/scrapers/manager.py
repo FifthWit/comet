@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import orjson
 import time
+import re
 
 from RTN import (
     parse,
@@ -36,7 +37,22 @@ from .torbox import get_torbox
 from .nyaa import get_nyaa
 
 
-def filter_worker(torrents, title, year, year_end, aliases, remove_adult_content):
+def filter_worker(
+    torrents,
+    title,
+    year,
+    year_end,
+    aliases,
+    remove_adult_content,
+    allowed_codecs=None,
+    allowed_audio_codecs=None,
+):
+    # Use settings from .env if not provided
+    if allowed_codecs is None:
+        allowed_codecs = getattr(settings, "ALLOWED_CODECS", ['x264', 'h264', 'x265', 'h265'])
+    if allowed_audio_codecs is None:
+        allowed_audio_codecs = getattr(settings, "ALLOWED_AUDIO_CODECS", ['AAC'])
+
     results = []
     for torrent in torrents:
         torrent_title = torrent["title"]
@@ -45,8 +61,29 @@ def filter_worker(torrents, title, year, year_end, aliases, remove_adult_content
 
         parsed = parse(torrent_title)
 
+        # --- Force codec detection based on title string ---
+        codec_map = ['x264', 'h264', 'x265', 'h265']
+        detected_codec = None
+        for c in codec_map:
+            if c in torrent_title.lower():
+                detected_codec = c
+                break
+        if detected_codec:
+            parsed.codec = detected_codec
+
         if remove_adult_content and parsed.adult:
             continue
+
+        if allowed_codecs:
+            codecs = parsed.codec if isinstance(parsed.codec, list) else [parsed.codec]
+            if not any(codec and codec.lower() in allowed_codecs for codec in codecs):
+                continue
+
+        # --- Audio codec filtering ---
+        if allowed_audio_codecs:
+            audio_codecs = parsed.audio if isinstance(parsed.audio, list) else [parsed.audio]
+            if not any(audio and audio.upper() in [a.upper() for a in allowed_audio_codecs] for audio in audio_codecs):
+                continue
 
         if not parsed.parsed_title or not title_match(
             title, parsed.parsed_title, aliases=aliases
